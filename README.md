@@ -104,19 +104,24 @@ Typical config keys: `ADMIN_USER`, `SSH_PORT`, `SECURITY_EMAIL`,
 
 ## Copy to the server
 
-```powershell
-scp -r "X:\Projects\Ubuntu Hardening" user@SERVER:/tmp/ubuntu-hardening
-```
+Prefer cloning from GitHub on the server:
 
 ```bash
-cd /tmp/ubuntu-hardening   # or ~/ubuntu-hardening
+git clone https://github.com/jampack/ubuntu-hardening.git
+cd ubuntu-hardening
 chmod +x harden-ubuntu.sh harden-docker.sh
 sudo ./harden-ubuntu.sh
 # … install apps / Docker when ready …
 sudo ./harden-docker.sh    # only if Docker is in use
 ```
 
-Lab helper (asks host/user/password): `python test/deploy_to_guest.py`
+Or copy from your admin machine (adjust the local path):
+
+```bash
+scp -r ./ubuntu-hardening user@SERVER:~/ubuntu-hardening
+```
+
+Optional lab helper (prompts for host/user/password): `python test/deploy_to_guest.py`
 
 ---
 

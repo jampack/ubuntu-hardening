@@ -64,8 +64,8 @@ _print_client_test_help() {
   log_info "Password prompt usually means KEY AUTH FAILED (wrong key/path), then SSH fell back to password."
   echo
   echo "Test as user \"${user}\" on port ${port} (current listener — still often 22 before ssh_port):"
-  echo "  type \$HOME\\.ssh\\id_ed25519.pub"
-  echo "  ssh -i \$HOME\\.ssh\\id_ed25519 -o IdentitiesOnly=yes -p ${port} ${user}@SERVER_IP"
+  echo "  ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -p ${port} ${user}@SERVER_IP"
+  echo "  (Windows: %USERPROFILE%\\.ssh\\id_ed25519)"
   echo
   echo "Notes:"
   echo "  - Paste the .pub line (public), never the private key."

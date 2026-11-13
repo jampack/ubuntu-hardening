@@ -3,10 +3,11 @@
 
 Usage:
   python test/deploy_to_guest.py
-  python test/deploy_to_guest.py 172.30.69.73
-  python test/deploy_to_guest.py --host 172.30.69.73 --user khan --port 22
+  python test/deploy_to_guest.py 192.0.2.10
+  python test/deploy_to_guest.py --host 192.0.2.10 --user admin --port 22
 
 If host/user/password are not given on the CLI or via env, the script prompts.
+Env overrides: HARDEN_HOST, HARDEN_USER, HARDEN_PASS, HARDEN_PORT.
 """
 from __future__ import annotations
 
@@ -179,7 +180,7 @@ def main() -> int:
     if not args.yes or not host:
         host = prompt_value("Host / IP", host)
     if not args.yes or not user:
-        user = prompt_value("SSH user", user or "khan")
+        user = prompt_value("SSH user", user or "ubuntu")
     if not args.yes or not password:
         password = prompt_value("SSH password", password, secret=True)
 

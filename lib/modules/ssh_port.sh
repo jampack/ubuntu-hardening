@@ -104,7 +104,7 @@ EOF
 
   echo
   echo "From your client, open a NEW session BEFORE closing this one:"
-  echo "  ssh -p ${SSH_PORT} -i \$HOME\\.ssh\\id_ed25519 ${ADMIN_USER}@SERVER_IP"
+  echo "  ssh -p ${SSH_PORT} -i ~/.ssh/id_ed25519 ${ADMIN_USER}@SERVER_IP"
 
   if confirm "Confirm new session as ${ADMIN_USER} on port ${SSH_PORT} succeeded?" "n"; then
     state_set ssh_port verified
