@@ -1,0 +1,27 @@
+[DEFAULT]
+
+bantime = 1h
+findtime = 10m
+maxretry = 5
+backend = systemd
+
+# Explicit firewall backend — verify against host discovery.
+banaction = nftables
+banaction_allports = nftables[type=allports]
+
+destemail = SECURITY_EMAIL
+sender = FAIL2BAN_SENDER_EMAIL
+mta = sendmail
+
+# action_mwl = firewall ban + email with whois + matching log lines.
+# Do NOT also add a separate sendmail-* action alongside action_mwl.
+action = %(action_mwl)s
+
+[sshd]
+enabled = true
+port = SSH_PORT
+filter = sshd
+backend = systemd
+maxretry = 5
+findtime = 10m
+bantime = 1h
