@@ -33,7 +33,7 @@ module_docker_inventory() {
       | grep -E 'docker\.sock|/var/run/docker.sock' || echo "(no docker.sock mounts found in summary)"
   else
     log_error "No running containers — unexpected if you already validated Docker with a workload"
-    if ! confirm "Continue inventory with zero containers?" "n"; then
+    if ! confirm_proceed "Continue inventory with zero containers?" "n"; then
       module_fail docker_inventory "No running containers"
     fi
   fi

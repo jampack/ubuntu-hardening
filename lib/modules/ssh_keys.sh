@@ -113,12 +113,12 @@ module_ssh_keys() {
       _print_client_test_help
       if confirm "Add / replace with another public key?" "n"; then
         :
-      elif confirm "Did key login work for user \"${ADMIN_USER}\" on port ${test_port} WITHOUT a password prompt?" "n"; then
+      elif confirm_test "Did key login work for user \"${ADMIN_USER}\" on port ${test_port} WITHOUT a password prompt?" "n"; then
         state_set ssh_keys verified
         return 0
       else
         log_warn "Do not continue until: ssh -p ${test_port} ${ADMIN_USER}@SERVER_IP works with key only."
-        if ! confirm "Retry / re-check?" "y"; then
+        if ! confirm_test "Retry / re-check?" "y"; then
           state_set ssh_keys failed
           die "SSH keys not verified — re-run: sudo ./harden-ubuntu.sh --module ssh_keys"
         fi
@@ -140,7 +140,7 @@ module_ssh_keys() {
       if [[ -s "${ak}" ]]; then
         continue
       fi
-      if ! confirm "Retry paste?" "y"; then
+      if ! confirm_test "Retry paste?" "y"; then
         state_set ssh_keys failed
         die "SSH keys not installed."
       fi
@@ -150,7 +150,7 @@ module_ssh_keys() {
     if ! _is_ssh_pubkey_line "${pubkey}"; then
       log_error "That does not look like an OpenSSH public key line."
       echo "Expected: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... comment"
-      if ! confirm "Try again?" "y"; then
+      if ! confirm_test "Try again?" "y"; then
         state_set ssh_keys failed
         die "SSH keys not installed."
       fi

@@ -1,22 +1,26 @@
-# Ubuntu 26.04 interactive hardening
+# Ubuntu server hardening toolkit
 
-Interactive, **fail-hard**, idempotent scripts for
+Interactive, **fail-hard**, idempotent tooling for Ubuntu **26.04** hosts: core OS/SSH hardening, optional Docker checks, and optional Coolify master/slave prep. Built around
 [`Ubuntu-26.04-Server-Hardening-Runbook.md`](Ubuntu-26.04-Server-Hardening-Runbook.md).
 
 | Script | Purpose |
 |--------|---------|
-| `harden-ubuntu.sh` | **Primary** — core host hardening (SSH, sysctl, Fail2ban, auditd, …) |
-| `harden-docker.sh` | **Optional** — after Docker is already installed and working |
+| `harden-ubuntu.sh` | **Primary** — host hardening (SSH, sysctl, Fail2ban, auditd, …); optional `--coolify-remote` for Coolify **slave** deploy user |
+| `harden-docker.sh` | **Optional** — after Docker is installed; use `--coolify-master` on the Coolify **host** |
 
-**Not automated:** provider/VPS firewall APIs, installing Docker or any PaaS panel.
+**Not automated:** provider/VPS firewall APIs, installing Docker or Coolify itself (use each product’s installer).
 
 ---
 
 ## Recommended order
 
-1. Run **`harden-ubuntu.sh`** on a fresh Ubuntu 26.04 server.
-2. Install whatever you need next (apps, Docker, a panel, …) using that product’s docs.
-3. If the host runs Docker, optionally run **`harden-docker.sh`** to verify API exposure, socket/group, containers, networking, storage, and Fail2ban interaction.
+1. Run **`harden-ubuntu.sh`** on a fresh Ubuntu 26.04 server  
+   (`--coolify-remote` if this box will be a Coolify **slave**).
+2. Install whatever you need next (apps, Docker, Coolify, …) using that product’s docs.
+3. If the host runs Docker, run **`harden-docker.sh`**  
+   (`--coolify-master` only on the Coolify **master**; omit it on slaves).
+
+See **Coolify — two scenarios** below for master vs slave detail.
 
 ---
 
@@ -60,6 +64,7 @@ Where OpenSSH **first-value-wins** matters, modules compare intent to
 | `apparmor` | Enforce + status |
 | `service_minimize` | Inventory; **never** auto-disables critical units |
 | `allow_users` | Restrict SSH; effective `allowusers` check |
+| `coolify_remote` | Only with `--coolify-remote`: Coolify slave user + master pubkey + passwordless sudo |
 | `tmp_harden` | `/tmp` `nodev,nosuid,noexec` via `tmp.mount` |
 | `verify` | Final checklist; any FAIL → stop |
 
@@ -73,7 +78,7 @@ This script does **not** install Docker.
 | Module | What it does |
 |--------|----------------|
 | `docker_check` | Docker/containerd active + enabled; reject snap Docker |
-| `docker_deploy_user` | Optional deploy user + SSH key + docker group (+ AllowUsers if needed) |
+| `docker_deploy_user` | Optional deploy user + SSH key. `--coolify-master`: import local Coolify keys + sudo. On slaves, auto-skip if user already from `coolify_remote` |
 | `docker_api` | Fail if TCP **2375/2376** exposed |
 | `docker_daemon` | Optional log rotation in `daemon.json` (restarts Docker) |
 | `docker_socket` | Socket mode / docker group inspect |
@@ -84,6 +89,31 @@ This script does **not** install Docker.
 | `docker_verify` | Final Docker checklist; FAIL → stop |
 
 Skip `docker_deploy_user` if you do not need a dedicated deploy account (CI/CD or a panel such as Coolify).
+
+### Coolify — two scenarios
+
+**1) Master (Coolify installed on this host)**  
+Install Coolify (brings Docker) → then:
+
+```bash
+sudo ./harden-docker.sh --coolify-master
+```
+
+Imports keys from `/data/coolify/ssh/keys`, deploy user `coolify`, passwordless sudo, AllowUsers.  
+UI: user `coolify`, port `SSH_PORT`, host `172.17.0.1` or LAN IP.
+
+**2) Slave / remote (Coolify master will SSH in later)**  
+
+```bash
+sudo ./harden-ubuntu.sh --coolify-remote    # creates coolify user + master pubkey + sudo
+# after Docker exists (Coolify may install it):
+sudo ./harden-docker.sh                    # NO --coolify-master
+```
+
+On the slave, **do not** pass `--coolify-master`. The deploy user already exists from `coolify_remote`; `docker_deploy_user` detects that and **skips** (keeps the user/keys/sudo). Docker harden only does API/socket/inventory/etc.  
+If you pass `--coolify-master` after `--coolify-remote`, the script **warns** (config `COOLIFY_ROLE=remote` / host state) and asks before continuing.
+
+Then on Coolify master → Add Server: slave IP, port `SSH_PORT`, user `coolify`, matching private key.
 
 ---
 
@@ -111,9 +141,13 @@ git clone https://github.com/jampack/ubuntu-hardening.git
 cd ubuntu-hardening
 chmod +x harden-ubuntu.sh harden-docker.sh
 sudo ./harden-ubuntu.sh
-# … install apps / Docker when ready …
-sudo ./harden-docker.sh    # only if Docker is in use
+# Coolify slave (no Coolify on this box):
+sudo ./harden-ubuntu.sh --coolify-remote
+# … install Docker / Coolify when ready …
+sudo ./harden-docker.sh                   # Docker only / Coolify slave
+sudo ./harden-docker.sh --coolify-master  # Coolify master host
 ```
+
 
 Or copy from your admin machine (adjust the local path):
 
@@ -121,7 +155,16 @@ Or copy from your admin machine (adjust the local path):
 scp -r ./ubuntu-hardening user@SERVER:~/ubuntu-hardening
 ```
 
-Optional lab helper (prompts for host/user/password): `python test/deploy_to_guest.py`
+Optional lab helper:
+
+```bash
+python test/deploy_to_guest.py
+# After harden (password auth off) — use ADMIN_USER + private key + SSH_PORT:
+python test/deploy_to_guest.py --host SERVER --user voyager --port 2121 --key ~/.ssh/id_ed25519 --yes
+```
+
+`--key` is a **file path** (preferred). Inline PEM also works, but a key file is easier on PowerShell.
+
 
 ---
 
@@ -135,8 +178,11 @@ sudo ./harden-ubuntu.sh --resume     # after a STOP / failed module
 sudo ./harden-ubuntu.sh --module sysctl
 sudo ./harden-ubuntu.sh --status
 sudo ./harden-ubuntu.sh --dry-run --menu
+sudo ./harden-ubuntu.sh --no-confirm   # skip accept/CONFIRM; still asks for values and lockout tests
+sudo ./harden-ubuntu.sh --coolify-remote   # Coolify slave deploy user
 
 sudo ./harden-docker.sh
+sudo ./harden-docker.sh --coolify-master
 sudo ./harden-docker.sh --module docker_check
 sudo ./harden-docker.sh --status
 sudo ./harden-docker.sh --resume

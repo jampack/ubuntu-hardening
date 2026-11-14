@@ -133,7 +133,7 @@ module_verify() {
   if _expect_module allow_users; then
     if sshd -T | grep -qi '^allowusers'; then
       sshd -T | grep -i '^allowusers' | tee -a "${report}"
-      _check "allowusers includes ADMIN_USER" bash -c "sshd -T | awk '/^allowusers /{print tolower(\$0)}' | grep -q \"$(echo "${ADMIN_USER}" | tr '[:upper:]' '[:lower:]')\""
+      _check "allowusers includes ADMIN_USER" sshd_allowusers_includes "${ADMIN_USER}"
     else
       echo "FAIL  allowusers not set" | tee -a "${report}"
       fail=$((fail + 1))

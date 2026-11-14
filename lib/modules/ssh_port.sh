@@ -38,7 +38,7 @@ module_ssh_port() {
 
   log_warn "HARD GATE: Confirm provider firewall ALREADY allows TCP ${SSH_PORT} before continuing."
   log_warn "Keep this session open. Do not remove TCP 22 at the provider until a new session on ${SSH_PORT} works."
-  if ! confirm_token "confirm TCP ${SSH_PORT} is reachable (provider/lab firewall) before moving SSH off 22"; then
+  if ! confirm_test "Can you already reach TCP ${SSH_PORT} (provider/lab firewall) before moving SSH off 22?" "n"; then
     state_set ssh_port skipped
     return 0
   fi
@@ -106,7 +106,7 @@ EOF
   echo "From your client, open a NEW session BEFORE closing this one:"
   echo "  ssh -p ${SSH_PORT} -i ~/.ssh/id_ed25519 ${ADMIN_USER}@SERVER_IP"
 
-  if confirm "Confirm new session as ${ADMIN_USER} on port ${SSH_PORT} succeeded?" "n"; then
+  if confirm_test "Confirm new session as ${ADMIN_USER} on port ${SSH_PORT} succeeded?" "n"; then
     state_set ssh_port verified
   else
     log_warn "Marked applied — verify manually; rollback: restore ssh.socket.d backup and daemon-reload/restart"

@@ -45,10 +45,19 @@ log rotation into daemon.json, and checks Fail2ban compatibility.
   --status        Print state
   --dry-run       Inspect-only where possible
   --yes           Auto-confirm (still warns on Docker restart)
+  --no-confirm    Apply every module without accept/CONFIRM prompts.
+                  Still asks for required values and for lockout tests.
+  --coolify-master
+                  Coolify *master* host: default deploy user coolify,
+                  import SSH keys from /data/coolify/ssh/keys (additive),
+                  passwordless sudo. Not for slave servers.
   -h, --help      Help
 
 Prerequisite: Docker already installed and running.
 Do NOT use this script to install Docker.
+Install Coolify before --coolify-master if you want automatic key import.
+Slave servers: omit --coolify-master; deploy user comes from
+harden-ubuntu.sh --coolify-remote (skip docker_deploy_user).
 EOF
 }
 
@@ -70,6 +79,11 @@ parse_args() {
       --status) MODE="status"; shift ;;
       --dry-run) DRY_RUN=1; shift ;;
       --yes) ASSUME_YES=1; shift ;;
+      --no-confirm) NO_CONFIRM=1; shift ;;
+      --coolify-master) COOLIFY_MODE=1; shift ;;
+      --coolify)
+        die "Flag --coolify was renamed to --coolify-master (Coolify host). Slave servers: omit it and skip docker_deploy_user if coolify_remote already ran."
+        ;;
       -h|--help) usage; exit 0 ;;
       *) die "Unknown option: $1" ;;
     esac
@@ -88,15 +102,26 @@ run_wizard() {
 }
 
 run_resume() {
-  local entry name st
+  section "Resume pending modules"
+  local entry name st ran=0
   for entry in "${MODULE_ORDER[@]}"; do
     name="${entry%%|*}"
     st="$(state_get "${name}")"
     case "${st}" in
-      verified|skipped) continue ;;
-      *) run_one_module "${name}" ;;
+      verified|skipped)
+        log_info "Skip ${name} (${st})"
+        continue
+        ;;
+      *)
+        log_info "Resume ${name} (${st:-pending})"
+        run_one_module "${name}"
+        ran=1
+        ;;
     esac
   done
+  if [[ "${ran}" -eq 0 ]]; then
+    log_ok "Nothing pending — every module is verified or skipped"
+  fi
   print_status
 }
 
@@ -128,6 +153,15 @@ main() {
   require_root
   detect_os
   init_runtime
+  if [[ "${NO_CONFIRM}" -eq 1 ]]; then
+    log_warn "--no-confirm: skipping accept/CONFIRM gates. Lockout tests still wait for your answer."
+  fi
+  if [[ "${COOLIFY_MODE}" -eq 1 ]]; then
+    log_info "--coolify-master: deploy user defaults to coolify; prefer importing keys from /data/coolify/ssh/keys"
+    if [[ ! -d /data/coolify ]]; then
+      log_warn "/data/coolify not found yet — install Coolify first, then re-run with --coolify-master"
+    fi
+  fi
   # Re-point state after init_runtime (which may touch host state file)
   STATE_FILE="${STATE_DIR}/docker-state.env"
   touch "${STATE_FILE}"
@@ -143,6 +177,33 @@ main() {
   echo "Docker must already be installed and running (this script does not install it)."
   if ! confirm "Docker is installed and a container/app works on this host?" "y"; then
     die "Install and validate Docker first, then re-run harden-docker.sh."
+  fi
+  if [[ "${COOLIFY_MODE}" -eq 0 && -d /data/coolify ]]; then
+    # Default n: without --coolify-master, declining continues as generic Docker harden.
+    if confirm "Coolify detected under /data/coolify — enable Coolify *master* mode for this run?" "n"; then
+      COOLIFY_MODE=1
+      log_info "Coolify master mode enabled for this run"
+    else
+      log_info "Continuing without Coolify master mode (pass --coolify-master to opt in)"
+    fi
+  fi
+
+  # Slave prep + master flag = wrong combo
+  if [[ "${COOLIFY_MODE}" -eq 1 ]]; then
+    load_config_env
+    local coolify_role remote_st=""
+    coolify_role="$(config_get COOLIFY_ROLE "")"
+    if [[ -f "${STATE_DIR}/state.env" ]]; then
+      remote_st="$(grep -E '^coolify_remote=' "${STATE_DIR}/state.env" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+    fi
+    if [[ "${coolify_role}" == "remote" || "${remote_st}" == "applied" || "${remote_st}" == "verified" ]]; then
+      log_warn "This host was prepared as a Coolify *slave* (harden-ubuntu --coolify-remote / COOLIFY_ROLE=remote)."
+      log_warn "You also enabled --coolify-master — that is for the Coolify *host*, not a remote node."
+      log_warn "On slaves run: sudo ./harden-docker.sh   (without --coolify-master)"
+      if ! confirm_proceed "Continue with --coolify-master anyway?" "n"; then
+        die "Aborted — drop --coolify-master on Coolify slave servers"
+      fi
+    fi
   fi
 
   if [[ -z "${MODE}" ]]; then
