@@ -21,17 +21,24 @@ Usage: harden-ubuntu.sh [options]
   --status        Print module state
   --dry-run       Check / prompt only; skip mutating apply where possible
   --yes           Auto-answer apply/confirm (dangerous; still logs warnings)
+  --no-confirm    Apply every module without accept/CONFIRM prompts.
+                  Still asks for required values and for lockout tests.
+  --coolify-remote
+                  Prepare a Coolify slave/remote deploy user (prompt for
+                  username + Coolify master public key; passwordless sudo;
+                  AllowUsers). No local Coolify/Docker required.
   -h, --help      Show this help
 
 Modules:
   assess backup_ssh admin_user ssh_keys ssh_hardening ssh_perms ssh_port
   sysctl fail2ban auditd unattended apparmor service_minimize allow_users
-  tmp_harden verify
+  coolify_remote tmp_harden verify
 
 Examples:
   sudo ./harden-ubuntu.sh
   sudo ./harden-ubuntu.sh --status
   sudo ./harden-ubuntu.sh --module ssh_hardening
+  sudo ./harden-ubuntu.sh --coolify-remote
   sudo ./harden-ubuntu.sh --dry-run --menu
 EOF
 }
@@ -54,10 +61,16 @@ parse_args() {
       --status) MODE="status"; shift ;;
       --dry-run) DRY_RUN=1; shift ;;
       --yes) ASSUME_YES=1; shift ;;
+      --no-confirm) NO_CONFIRM=1; shift ;;
+      --coolify-remote) COOLIFY_REMOTE=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) die "Unknown option: $1 (try --help)" ;;
     esac
   done
+  # Explicit single-module run implies Coolify remote prep.
+  if [[ "${MODE}" == "module" && "${MODULE_NAME}" == "coolify_remote" ]]; then
+    COOLIFY_REMOTE=1
+  fi
 }
 
 run_wizard() {
@@ -74,15 +87,25 @@ run_wizard() {
 
 run_resume() {
   section "Resume pending modules"
-  local entry name st
+  local entry name st ran=0
   for entry in "${MODULE_ORDER[@]}"; do
     name="${entry%%|*}"
     st="$(state_get "${name}")"
     case "${st}" in
-      verified|skipped) continue ;;
-      *) run_one_module "${name}" ;;
+      verified|skipped)
+        log_info "Skip ${name} (${st})"
+        continue
+        ;;
+      *)
+        log_info "Resume ${name} (${st:-pending})"
+        run_one_module "${name}"
+        ran=1
+        ;;
     esac
   done
+  if [[ "${ran}" -eq 0 ]]; then
+    log_ok "Nothing pending — every module is verified or skipped"
+  fi
   print_status
 }
 
@@ -114,6 +137,12 @@ main() {
   require_root
   detect_os
   init_runtime
+  if [[ "${NO_CONFIRM}" -eq 1 ]]; then
+    log_warn "--no-confirm: skipping accept/CONFIRM gates. Lockout tests still wait for your answer."
+  fi
+  if [[ "${COOLIFY_REMOTE}" -eq 1 ]]; then
+    log_info "--coolify-remote: will offer Coolify slave deploy user (master pubkey + passwordless sudo)"
+  fi
   load_config_env
 
   case "${MODE}" in

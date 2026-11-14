@@ -62,7 +62,7 @@ EOF
 
   if [[ "${ASSUME_YES}" -eq 1 ]]; then
     log_warn "ASSUME_YES set — skipping unattended-upgrade --dry-run (explicit)"
-  elif confirm "Run unattended-upgrade --dry-run --debug?" "y"; then
+  elif confirm_test "Run unattended-upgrade --dry-run --debug?" "y"; then
     if ! timeout 300 unattended-upgrade --dry-run --debug; then
       module_fail unattended "unattended-upgrade --dry-run failed or timed out"
     fi

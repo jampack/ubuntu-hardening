@@ -16,6 +16,9 @@ BACKUP_ROOT="/root/hardening-backups"
 
 DRY_RUN=0
 ASSUME_YES=0
+NO_CONFIRM=0
+COOLIFY_MODE=0
+COOLIFY_REMOTE=0
 HARDEN_RUN_TS=""
 HARDEN_LOG_FILE=""
 HARDEN_BACKUP_DIR=""
@@ -36,6 +39,7 @@ MODULE_ORDER=(
   "apparmor|AppArmor enforcement"
   "service_minimize|Service minimization"
   "allow_users|SSH AllowUsers restriction"
+  "coolify_remote|Coolify remote (slave) deploy user"
   "tmp_harden|/tmp mount hardening"
   "verify|Final verification checklist"
 )
@@ -150,7 +154,7 @@ detect_os() {
   if [[ "${VERSION_ID:-}" != "26.04" ]]; then
     log_warn "Designed for Ubuntu 26.04 LTS; detected ${PRETTY_NAME:-$VERSION_ID}."
     log_warn "Paths/units (ssh.socket, tmp.mount, package names) may differ — mismatches should warn or fail, not silently succeed."
-    if ! confirm "Continue anyway?" "n"; then
+    if ! confirm_proceed "Continue anyway on this Ubuntu version?" "n"; then
       die "Aborted due to OS version mismatch."
     fi
   fi
@@ -185,7 +189,7 @@ config_get() {
   local key="$1" default="${2:-}"
   if [[ -f "${CONFIG_FILE}" ]]; then
     local val
-    val="$(grep -E "^${key}=" "${CONFIG_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2- | sed 's/^"//;s/"$//')"
+    val="$(grep -E "^${key}=" "${CONFIG_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2- | sed 's/^"//;s/"$//' || true)"
     if [[ -n "${val}" ]]; then
       printf '%s' "${val}"
       return 0
@@ -316,10 +320,14 @@ prompt_interfaces() {
 }
 
 state_get() {
-  local module="$1"
+  local module="$1" val=""
   if [[ -f "${STATE_FILE}" ]]; then
-    grep -E "^${module}=" "${STATE_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2-
+    # grep exits 1 when the key is absent. Under set -e that aborts --resume
+    # with no message, so never propagate that status.
+    val="$(grep -E "^${module}=" "${STATE_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
   fi
+  printf '%s' "${val}"
+  return 0
 }
 
 state_set() {
@@ -362,6 +370,15 @@ confirm() {
     log_info "Auto-confirm: ${prompt}"
     return 0
   fi
+  # --no-confirm answers acceptance prompts with their default and does not ask.
+  if [[ "${NO_CONFIRM}" -eq 1 ]]; then
+    if [[ "${default}" == "y" ]]; then
+      log_info "No-confirm yes: ${prompt}"
+      return 0
+    fi
+    log_info "No-confirm no: ${prompt}"
+    return 1
+  fi
   if [[ "${default}" == "y" ]]; then
     hint="Y/n"
   else
@@ -378,14 +395,33 @@ confirm() {
   done
 }
 
+# Acceptance gate that must not block --no-confirm (always proceed).
+confirm_proceed() {
+  local prompt="$1"
+  if [[ "${ASSUME_YES}" -eq 1 || "${NO_CONFIRM}" -eq 1 ]]; then
+    log_info "Proceeding: ${prompt}"
+    return 0
+  fi
+  confirm "${prompt}" "${2:-y}"
+}
+
+# Lockout or delivery test. Always asked, including under --no-confirm.
+confirm_test() {
+  local saved="${NO_CONFIRM}" rc=0
+  NO_CONFIRM=0
+  confirm "$@" || rc=$?
+  NO_CONFIRM="${saved}"
+  return "${rc}"
+}
+
 # Require typing CONFIRM (lockout-risk gates).
 # usage: confirm_token "Short description of the action"
 confirm_token() {
   local what="${1:-continue}"
   local token="CONFIRM"
   local answer
-  if [[ "${ASSUME_YES}" -eq 1 ]]; then
-    log_warn "ASSUME_YES set — skipping typed gate for: ${what}"
+  if [[ "${ASSUME_YES}" -eq 1 || "${NO_CONFIRM}" -eq 1 ]]; then
+    log_warn "Skipping typed CONFIRM (--yes/--no-confirm): ${what}"
     return 0
   fi
   echo "About to: ${what}"
@@ -405,7 +441,7 @@ prompt_choice() {
   local prompt="${1:-Proceed with this module?}"
   local choice
   # Dry-run still enters modules so they can perform check-only logic.
-  if [[ "${DRY_RUN}" -eq 1 || "${ASSUME_YES}" -eq 1 ]]; then
+  if [[ "${DRY_RUN}" -eq 1 || "${ASSUME_YES}" -eq 1 || "${NO_CONFIRM}" -eq 1 ]]; then
     echo "apply"
     return 0
   fi
@@ -584,6 +620,32 @@ verify_sshd_effective() {
   return "${bad}"
 }
 
+# OpenSSH prints one "allowusers NAME" line per user (not one combined line).
+sshd_allowusers_effective() {
+  sshd -T 2>/dev/null | awk '
+    /^allowusers / {
+      for (i = 2; i <= NF; i++) {
+        if (n++) printf " "
+        printf "%s", tolower($i)
+      }
+    }
+    END { print "" }
+  '
+}
+
+# True if effective allowusers includes USER (case-insensitive).
+sshd_allowusers_includes() {
+  local user="$1" user_l
+  user_l="$(printf '%s' "${user}" | tr '[:upper:]' '[:lower:]')"
+  sshd -T 2>/dev/null | awk -v u="${user_l}" '
+    BEGIN { found = 0 }
+    /^allowusers / {
+      for (i = 2; i <= NF; i++) if (tolower($i) == u) found = 1
+    }
+    END { exit !found }
+  '
+}
+
 require_cmd() {
   local c
   for c in "$@"; do
@@ -667,6 +729,9 @@ module_blurb() {
     allow_users)
       echo "Restrict SSH with AllowUsers (ADMIN_USER list). Hard gate + reload; can lock out omitted accounts."
       ;;
+    coolify_remote)
+      echo "Optional (--coolify-remote): create a Coolify-only deploy user, paste the Coolify master public key, passwordless sudo, AllowUsers. No local /data/coolify or Docker required (slave servers)."
+      ;;
     tmp_harden)
       echo "Harden /tmp with nodev,nosuid,noexec via tmp.mount drop-in. Can break apps that execute from /tmp."
       ;;
@@ -678,6 +743,7 @@ module_blurb() {
       ;;
     docker_deploy_user)
       echo "Optional: create a dedicated deploy user + SSH key, add to docker group, update AllowUsers if needed (CI/CD or panels)."
+      echo "With --coolify-master: default user coolify; import Coolify keys; passwordless sudo. On slaves, skip if coolify_remote already created the user."
       ;;
     docker_api)
       echo "Check that the Docker API is not exposed on TCP 2375/2376 (critical if publicly reachable)."
@@ -745,7 +811,7 @@ require_critical_gate() {
     verified) return 0 ;;
     skipped)
       log_warn "Prior module ${prior} was skipped. ${reason}"
-      confirm "Acknowledge risk and continue?" "n" || die "Stopped: ${prior} not verified"
+      confirm_proceed "Acknowledge risk and continue?" "n" || die "Stopped: ${prior} not verified"
       return 0
       ;;
     *)

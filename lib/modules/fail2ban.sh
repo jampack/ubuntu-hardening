@@ -8,8 +8,12 @@ _fail2ban_configure_postfix() {
     log_warn "ASSUME_YES without SMTP_USERNAME — Postfix relay not configured (explicit skip)"
     return 0
   fi
-  if ! confirm "Configure Postfix + Gmail-style SMTP relay now?" "n"; then
+  # --no-confirm must still stop here: credentials and the test mail come next.
+  if ! confirm_test "Configure Postfix + Gmail-style SMTP relay now?" "n"; then
     log_info "Postfix relay declined by operator"
+    if systemctl is-active --quiet postfix 2>/dev/null; then
+      _fail2ban_send_test_mail
+    fi
     return 0
   fi
 
@@ -65,7 +69,13 @@ _fail2ban_configure_postfix() {
     module_fail fail2ban "postfix inet_interfaces must be loopback-only (got: ${inet})"
   fi
 
-  if confirm "Send a test email to ${SECURITY_EMAIL}?" "y"; then
+  _fail2ban_send_test_mail
+}
+
+_fail2ban_send_test_mail() {
+  load_config_env
+  [[ -n "${SECURITY_EMAIL}" ]] || module_fail fail2ban "SECURITY_EMAIL is empty — cannot send a test message"
+  if confirm_test "Send a test email to ${SECURITY_EMAIL}?" "y"; then
     require_cmd mail
     if ! echo "Postfix outbound-only test from harden-ubuntu.sh" | mail -s "VPS email test" "${SECURITY_EMAIL}"; then
       module_fail fail2ban "mail command failed — Postfix/SMTP relay not confirmed working"
@@ -125,6 +135,21 @@ module_fail2ban() {
   require_service_enabled fail2ban
   require_service_active fail2ban
 
+  # systemd can report active before /var/run/fail2ban/fail2ban.sock exists.
+  log_info "Waiting up to 15s for the fail2ban socket"
+  local waited=0
+  while [[ "${waited}" -lt 15 ]]; do
+    if [[ -S /var/run/fail2ban/fail2ban.sock ]] && fail2ban-client ping >/dev/null 2>&1; then
+      log_ok "fail2ban socket ready (${waited}s)"
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if [[ ! -S /var/run/fail2ban/fail2ban.sock ]] || ! fail2ban-client ping >/dev/null 2>&1; then
+    module_fail fail2ban "fail2ban socket not ready after 15s — check: systemctl status fail2ban"
+  fi
+
   echo "Jail status:"
   if ! fail2ban-client status; then
     module_fail fail2ban "fail2ban-client status failed"
@@ -133,15 +158,49 @@ module_fail2ban() {
     module_fail fail2ban "sshd/ssh jail status unavailable — jail may not be loaded"
   fi
 
-  local jail_port
-  jail_port="$(fail2ban-client get sshd port 2>/dev/null || fail2ban-client get ssh port 2>/dev/null || true)"
-  if [[ -z "${jail_port}" ]]; then
-    module_fail fail2ban "Could not read fail2ban sshd jail port"
+  # `get sshd port` is not implemented in Fail2ban 1.x (it prints
+  # "Invalid command (no get action...)"). The running daemon keeps the
+  # port on each action: get <jail> actions, then get <jail> action <name> port.
+  local actions_raw action port saw_ban=0
+  actions_raw="$(fail2ban-client get sshd actions 2>/dev/null || true)"
+  if [[ -z "${actions_raw}" || "${actions_raw}" == *Invalid* || "${actions_raw}" == *Error* ]]; then
+    module_fail fail2ban "Running fail2ban did not list sshd actions (got: ${actions_raw:-<empty>})"
   fi
-  if [[ "${jail_port}" != *"${SSH_PORT}"* ]]; then
-    module_fail fail2ban "fail2ban sshd jail port='${jail_port}' — expected to include ${SSH_PORT}"
+  log_info "Running sshd actions: ${actions_raw}"
+  # Fail2ban 1.1 prints prose, not a Python list:
+  #   The jail sshd has the following actions:
+  #   nftables, sendmail-whois-lines
+  while read -r action; do
+    [[ -z "${action}" || "${action}" == "sshd" ]] && continue
+    case "${action}" in
+      *nftables*|*iptables*|*firewall*|*ufw*|*nft*) ;;
+      *)
+        log_info "Skipping non-ban action ${action}"
+        continue
+        ;;
+    esac
+    port="$(fail2ban-client get sshd action "${action}" port 2>&1 || true)"
+    port="$(printf '%s' "${port}" | tr -d "\r'\"[:space:]" | head -n1)"
+    if [[ -z "${port}" || "${port}" == *Invalid* || "${port}" == *Error* || "${port}" == *Exception* ]]; then
+      module_fail fail2ban "Running action '${action}' did not return a port (got: ${port:-<empty>})"
+    fi
+    saw_ban=1
+    if [[ "${port}" != *"${SSH_PORT}"* ]]; then
+      module_fail fail2ban "Running ban action '${action}' port='${port}' — expected ${SSH_PORT}"
+    fi
+    log_ok "Running ban action '${action}' port=${port}"
+  done < <(printf '%s\n' "${actions_raw}" | awk '
+    /following actions:/ { next }
+    {
+      n = split($0, a, /[,[:space:]]+/)
+      for (i = 1; i <= n; i++) {
+        if (a[i] ~ /^[A-Za-z][A-Za-z0-9_.-]*$/) print a[i]
+      }
+    }
+  ')
+  if [[ "${saw_ban}" -ne 1 ]]; then
+    module_fail fail2ban "Running sshd jail has no nftables/iptables action exposing port ${SSH_PORT}"
   fi
-  log_ok "fail2ban sshd jail port includes ${SSH_PORT} (got: ${jail_port})"
 
   local myip
   myip="$(current_ssh_client_ip)"

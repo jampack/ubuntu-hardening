@@ -27,7 +27,8 @@ module_service_minimize() {
     return 0
   fi
 
-  if ! confirm "Interactively disable any services now?" "n"; then
+  # --no-confirm still asks: you must name units. --yes cannot, so it stays inventory-only.
+  if ! confirm_test "Interactively disable any services now?" "n"; then
     state_set service_minimize skipped
     return 0
   fi
@@ -46,7 +47,7 @@ module_service_minimize() {
         ;;
     esac
     systemctl status "${unit}" --no-pager -l || true
-    if confirm_token "disable and stop ${unit}"; then
+    if confirm_test "Disable and stop ${unit}?" "n"; then
       run_or_die "disable ${unit}" systemctl disable --now "${unit}"
       if systemctl is-enabled --quiet "${unit}" 2>/dev/null; then
         module_fail service_minimize "${unit} still enabled after disable"

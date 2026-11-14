@@ -31,7 +31,7 @@ module_ssh_hardening() {
     echo "00-ssh-hardening.conf may NOT take effect for those keywords until you"
     echo "edit/remove the competing lines. This script will not delete them blindly."
     echo
-    if ! confirm "Write 00-ssh-hardening.conf anyway, then verify sshd -T (mismatch = STOP)?" "n"; then
+    if ! confirm_proceed "Write 00-ssh-hardening.conf anyway, then verify sshd -T (mismatch = STOP)?" "n"; then
       state_set ssh_hardening skipped
       return 0
     fi

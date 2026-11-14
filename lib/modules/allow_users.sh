@@ -55,13 +55,12 @@ module_allow_users() {
       | grep -iE '^(allowusers|permitrootlogin|passwordauthentication)' || true
   fi
 
-  local au admin_l
-  admin_l="$(printf '%s' "${ADMIN_USER}" | tr '[:upper:]' '[:lower:]')"
-  au="$(sshd -T 2>/dev/null | awk '/^allowusers /{print tolower($0); exit}')"
-  if [[ "${au}" != *"${admin_l}"* ]]; then
+  local au
+  au="$(sshd_allowusers_effective)"
+  if ! sshd_allowusers_includes "${ADMIN_USER}"; then
     module_fail allow_users "Effective allowusers does not include ${ADMIN_USER}: ${au:-<missing>} (competing directive?)"
   fi
-  log_ok "Effective allowusers includes ${ADMIN_USER}"
+  log_ok "Effective allowusers includes ${ADMIN_USER} (${au})"
 
   if ! confirm_token "reload SSH to apply AllowUsers"; then
     state_set allow_users applied
@@ -70,12 +69,12 @@ module_allow_users() {
   fi
   run_or_die "reload SSH" systemctl reload ssh
 
-  au="$(sshd -T 2>/dev/null | awk '/^allowusers /{print tolower($0); exit}')"
-  if [[ "${au}" != *"${admin_l}"* ]]; then
+  au="$(sshd_allowusers_effective)"
+  if ! sshd_allowusers_includes "${ADMIN_USER}"; then
     module_fail allow_users "After reload, allowusers still wrong: ${au:-<missing>}"
   fi
 
-  if confirm "Confirm ${ADMIN_USER} can still open a new SSH session?" "n"; then
+  if confirm_test "Confirm ${ADMIN_USER} can still open a new SSH session?" "n"; then
     state_set allow_users verified
   else
     log_warn "If locked out, restore drop-in from ${HARDEN_BACKUP_DIR} via console"
