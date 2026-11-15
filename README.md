@@ -14,13 +14,11 @@ Interactive, **fail-hard**, idempotent tooling for Ubuntu **26.04** hosts: core 
 
 ## Recommended order
 
-1. Run **`harden-ubuntu.sh`** on a fresh Ubuntu 26.04 server  
-   (`--coolify-remote` if this box will be a Coolify **slave**).
-2. Install whatever you need next (apps, Docker, Coolify, …) using that product’s docs.
-3. If the host runs Docker, run **`harden-docker.sh`**  
-   (`--coolify-master` only on the Coolify **master**; omit it on slaves).
+1. Run **`harden-ubuntu.sh`** on a fresh Ubuntu 26.04 server.
+2. Install apps / Docker / Coolify using each product’s docs.
+3. If Docker is present, run **`harden-docker.sh`**.
 
-See **Coolify — two scenarios** below for master vs slave detail.
+For **Coolify**, follow the exact master/slave order in **Coolify setup** below (timing of “connect server” matters).
 
 ---
 
@@ -90,30 +88,44 @@ This script does **not** install Docker.
 
 Skip `docker_deploy_user` if you do not need a dedicated deploy account (CI/CD or a panel such as Coolify).
 
-### Coolify — two scenarios
+### Coolify setup
 
-**1) Master (Coolify installed on this host)**  
-Install Coolify (brings Docker) → then:
+Do these steps **in order**. Connecting Coolify too early (before docker harden on the master) is what causes the SSH/sudo loops.
 
-```bash
-sudo ./harden-docker.sh --coolify-master
-```
+#### Master (this host runs Coolify)
 
-Imports keys from `/data/coolify/ssh/keys`, deploy user `coolify`, passwordless sudo, AllowUsers.  
-UI: user `coolify`, port `SSH_PORT`, host `172.17.0.1` or LAN IP.
+1. **Host harden** (no Coolify flags):
+   ```bash
+   sudo ./harden-ubuntu.sh
+   ```
+2. **Install Coolify** with Coolify’s installer (it brings Docker).  
+   **Do not** validate / connect the localhost server in the Coolify UI yet.
+3. **Docker harden with master switch** (imports Coolify keys, deploy user, passwordless sudo):
+   ```bash
+   sudo ./harden-docker.sh --coolify-master
+   ```
+4. **Now** connect Coolify to this server in the UI:
+   - User: `coolify` (or the deploy user the script used)
+   - Port: your `SSH_PORT` (default **2121**)
+   - Host: `172.17.0.1` or this machine’s LAN/public IP  
+     (avoid `host.docker.internal` if it fails)
+   - Key: Coolify’s default / localhost key (the one the script authorized)
 
-**2) Slave / remote (Coolify master will SSH in later)**  
+#### Slave (remote server managed by a Coolify master)
 
-```bash
-sudo ./harden-ubuntu.sh --coolify-remote    # creates coolify user + master pubkey + sudo
-# after Docker exists (Coolify may install it):
-sudo ./harden-docker.sh                    # NO --coolify-master
-```
+1. **Host harden with remote switch** (creates Coolify-only user, paste **master** public key, passwordless sudo; Docker not required yet):
+   ```bash
+   sudo ./harden-ubuntu.sh --coolify-remote
+   ```
+2. **On the Coolify master UI** → Add Server → this slave’s IP, port `SSH_PORT`, user `coolify`, matching private key.  
+   Let Coolify connect so it can **install Docker** (and anything else it needs) on the slave.
+3. **Docker harden on the slave** — **without** `--coolify-master`:
+   ```bash
+   sudo ./harden-docker.sh
+   ```
+   The deploy user from step 1 is kept; `docker_deploy_user` skips. This pass hardens/checks Docker only.
 
-On the slave, **do not** pass `--coolify-master`. The deploy user already exists from `coolify_remote`; `docker_deploy_user` detects that and **skips** (keeps the user/keys/sudo). Docker harden only does API/socket/inventory/etc.  
-If you pass `--coolify-master` after `--coolify-remote`, the script **warns** (config `COOLIFY_ROLE=remote` / host state) and asks before continuing.
-
-Then on Coolify master → Add Server: slave IP, port `SSH_PORT`, user `coolify`, matching private key.
+If you run `--coolify-master` on a host that already used `--coolify-remote`, the script **warns** and asks before continuing.
 
 ---
 
@@ -140,13 +152,9 @@ Prefer cloning from GitHub on the server:
 git clone https://github.com/jampack/ubuntu-hardening.git
 cd ubuntu-hardening
 chmod +x harden-ubuntu.sh harden-docker.sh
-sudo ./harden-ubuntu.sh
-# Coolify slave (no Coolify on this box):
-sudo ./harden-ubuntu.sh --coolify-remote
-# … install Docker / Coolify when ready …
-sudo ./harden-docker.sh                   # Docker only / Coolify slave
-sudo ./harden-docker.sh --coolify-master  # Coolify master host
 ```
+
+Then follow **Coolify setup** (or plain host → Docker harden) — do not connect Coolify on the master until after `--coolify-master`.
 
 
 Or copy from your admin machine (adjust the local path):
